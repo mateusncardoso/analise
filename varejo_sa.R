@@ -369,21 +369,31 @@ credito %>%
        caption = 'Fonte: Banco Central do Brasil.')
 
 
-#volume
+### volume
 
 library(deflateBR)
 
-credito_livre <- read_csv2('credito_livre_direcionado_pf.csv')
+credito_total <- read_csv2('credito_livre_direcionado.csv')
 
-credito_livre %>% 
-  slice(-128) %>% 
+#breaks e limits para o gráfico
+
+breaks <- \(x) {
+  if (max(x) < 100) seq(20, 80, 20) else seq(200, 400, 50)
+}
+
+limits <- \(x) {
+  if (max(x) < 100) c(20, 81) else c(200, 400)
+}
+
+# gráfico
+credito_total %>% 
+  slice(-94) %>% 
   rename('data' = 1,
          'livre_mi' = 2,
          'direcionado_mi' = 3) %>% 
   separate(data, into = c('mes', 'ano'), sep = '/') %>% 
   mutate(data = lubridate::make_date(year = ano,
                                      month = mes)) %>% 
-  filter(ano >= 2014) %>% 
   pivot_longer(!c(data, mes, ano), names_to = 'tipo', values_to = 'valor')  %>% 
   mutate(valor = as.numeric(str_replace(valor, '\\.', '')),
          valor_real = deflate(valor, data, '09/2021'),
@@ -393,22 +403,23 @@ credito_livre %>%
                        labels = c('Livre',
                                   'Direcionado'))) %>% 
   ggplot(aes(x = data, y = valor_real/1000, color = tipo))+
-  geom_line(size = 1)+
-  scale_color_manual(values = c('#001233', '#0353a4'))+
+  geom_line(size = 1.5, color = '#0353a4')+
   scale_x_date(date_breaks = '1 year',
                date_labels = '%Y')+
-  scale_y_continuous(limits = c(0, 225),
-                     breaks = seq(0, 225, 25),
+  scale_y_continuous(breaks = breaks,
+                     limits = limits,
                      labels = scales::dollar_format(prefix = 'R$ '))+
   theme_minimal()+
+  theme(plot.margin = margin(.2, .5, .2, .2, unit = 'cm'))+
+  facet_wrap(~tipo,
+             scales = 'free_y')+
   theme(legend.position = 'bottom')+
-  labs(title = 'Concessões mensais de Crédito para Pessoa Física',
+  labs(title = 'Concessões mensais de Crédito com ajuste sazonal',
        subtitle = 'Em bilhões de reais, corrigidos para 09/2021 pelo IPCA',
        x = '',
        y = '',
        color = '',
        caption = 'Fonte: Banco Central do Brasil.')
-
 
 
 #### ---- CONFIANÇA CONSUMIDOR (VER OUTRA FONTE) ---- ####
@@ -476,3 +487,154 @@ varejo %>%
 ?theme
 
 #### ---- CAGED ---- ####
+library(basedosdados)
+set_billing_id('basedosdados-316822')
+
+### geral
+"SELECT ano,
+       mes,
+       sigla_uf, 
+       SUM(admitidos) AS adm,
+       SUM(desligados) AS desl,
+       SUM(saldo_movimentacao) AS saldo 
+FROM `basedosdados.br_me_caged.microdados_estabelecimentos`
+GROUP BY ano, mes, sigla_uf 
+ORDER BY sigla_uf, ano, mes" %>% 
+  read_sql() %>% 
+  mutate_if(bit64::is.integer64, as.integer)-> caged
+
+caged %>% 
+  group_by(ano, mes) %>% 
+  summarise(adm = sum(adm),
+            desl = sum(desl),
+            saldo = sum(saldo)) %>%
+  mutate(data = lubridate::make_date(year = ano,
+                                     month = mes)) %>%
+  pivot_longer(!c(ano, mes, data), values_to = 'total', names_to = 'tipo') %>% 
+  filter(tipo == 'saldo') %>% 
+  ggplot(aes(x = data,
+             y = total/1000)) + 
+  geom_bar(stat = 'identity', fill = '#0353a4')+
+  scale_x_date(date_breaks = '2 month',
+               date_labels = '%m/%Y')+
+  scale_y_continuous(limits = c(-1000, 500),
+                     breaks = seq(-1000, 500, 250))+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = 90,
+                                   vjust = 0.5))+
+  labs(title = 'Saldo de empregos formais',
+       subtitle = 'Em milhares',
+       x = '',
+       y = '',
+       caption = 'Fonte: Novo Caged. Extraído por meio da Base dos Dados.')
+
+# RS e SC
+
+caged %>% 
+  filter(sigla_uf %in% c('RS', 'SC')) %>% 
+  group_by(ano, mes, sigla_uf) %>% 
+  summarise(adm = sum(adm),
+            desl = sum(desl),
+            saldo = sum(saldo)) %>% 
+  mutate(data = lubridate::make_date(year = ano,
+                                     month = mes)) %>%
+  pivot_longer(!c(ano, mes, data, sigla_uf),
+               values_to = 'total', names_to = 'tipo') %>% 
+  filter(tipo == 'saldo') %>% 
+  ggplot(aes(x = data,
+             y = total,
+             fill = sigla_uf)) + 
+  geom_bar(stat = 'identity', position = 'dodge')+
+  scale_x_date(date_breaks = '2 month',
+               date_labels = '%m/%Y')+
+  scale_fill_manual(values = c('#001233', "#33415c"))+
+  scale_y_continuous(limits = c(-90000, 50000),
+                     breaks = seq(-90000, 50000, 20000))+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = 90,
+                                   vjust = 0.5),
+        legend.position = 'bottom')+
+  labs(title = 'Saldo de empregos formais',
+       subtitle = 'Rio Grande do Sul e Santa Catarina',
+       x = '',
+       y = '',
+       fill = '',
+       caption = 'Fonte: Novo Caged. Extraído por meio da Base dos Dados.')
+
+
+### setor de varejo
+
+"SELECT ano,
+       mes,
+       sigla_uf, 
+       cnae_2,
+       SUM(admitidos) AS adm,
+       SUM(desligados) AS desl,
+       SUM(saldo_movimentacao) AS saldo 
+FROM `basedosdados.br_me_caged.microdados_estabelecimentos`
+GROUP BY ano, mes, sigla_uf, cnae_2 
+HAVING cnae_2 = '47539'
+ORDER BY sigla_uf, ano, mes" %>% 
+  read_sql() %>% 
+  mutate_if(bit64::is.integer64, as.integer)-> caged_cnae
+
+
+caged_cnae %>% 
+  group_by(ano, mes) %>% 
+  summarise(adm = sum(adm),
+            desl = sum(desl),
+            saldo = sum(saldo)) %>% 
+  mutate(data = lubridate::make_date(year = ano,
+                                     month = mes)) %>%
+  pivot_longer(!c(ano, mes, data), values_to = 'total', names_to = 'tipo') %>% 
+  filter(tipo == 'saldo') %>% 
+  ggplot(aes(x = data,
+             y = total)) + 
+  geom_bar(stat = 'identity', fill = '#0353a4')+
+  scale_x_date(date_breaks = '2 month',
+               date_labels = '%m/%Y')+
+  scale_y_continuous(limits = c(-7000, 7000),
+                     breaks = seq(-7000, 7000, 2000))+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = 90,
+                                   vjust = 0.5))+
+  labs(title = 'Saldo de empregos formais',
+       subtitle = 'Comércio varejista especializado de eletrodomésticos e equipamentos de áudio e vídeo',
+       x = '',
+       y = '',
+       caption = 'Fonte: Novo Caged. Extraído por meio da Base dos Dados.')
+
+
+# RS e SC
+
+caged_cnae %>% 
+  filter(sigla_uf %in% c('RS', 'SC')) %>% 
+  group_by(ano, mes, sigla_uf) %>% 
+  summarise(adm = sum(adm),
+            desl = sum(desl),
+            saldo = sum(saldo)) %>% 
+  mutate(data = lubridate::make_date(year = ano,
+                                     month = mes)) %>%
+  pivot_longer(!c(ano, mes, data, sigla_uf),
+               values_to = 'total', names_to = 'tipo') %>% 
+  filter(tipo == 'saldo') %>% 
+  ggplot(aes(x = data,
+             y = total,
+             fill = sigla_uf)) + 
+  geom_bar(stat = 'identity', position = 'dodge')+
+  scale_x_date(date_breaks = '2 month',
+               date_labels = '%m/%Y')+
+  scale_fill_manual(values = c('#001233', "#33415c"))+
+  scale_y_continuous(limits = c(-1000, 500))+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = 90,
+                                   vjust = 0.5),
+        legend.position = 'bottom')+
+  labs(title = 'Saldo de empregos formais',
+       subtitle = 'Comércio varejista especializado de eletrodomésticos e equipamentos de áudio e vídeo',
+       x = '',
+       y = '',
+       fill = '',
+       caption = 'Fonte: Novo Caged. Extraído por meio da Base dos Dados.')
+
+
